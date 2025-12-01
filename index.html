@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <title>Mapa lokalit</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Leaflet CSS z CDN -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #app {
+      display: flex;
+      height: 100vh;
+      width: 100%;
+    }
+
+    /* Levý panel s filtry / seznamem */
+    #sidebar {
+      width: 20%;
+      min-width: 260px;
+      max-width: 360px;
+      border-right: 1px solid #ddd;
+      background: #f7f7f7;
+      box-sizing: border-box;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .sidebar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px 6px 12px;
+      border-bottom: 1px solid #e0e0e0;
+      background: #f1f1f1;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+    }
+
+    .sidebar-header h2 {
+      font-size: 16px;
+      margin: 0;
+    }
+
+    #toggle-all {
+      font-size: 12px;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      background: #ffffff;
+      cursor: pointer;
+    }
+
+    #toggle-all:hover {
+      background: #e0e0e0;
+    }
+
+    #inst-list {
+      padding: 6px 12px 10px 12px;
+      box-sizing: border-box;
+      flex: 1;
+    }
+
+    .inst-group {
+      margin-bottom: 8px;
+      border-bottom: 1px solid #e0e0e0;
+      padding-bottom: 4px;
+    }
+
+    .inst-header {
+      display: flex;
+      align-items: center;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: bold;
+    }
+
+    .inst-header span.label-text {
+      margin-left: 4px;
+    }
+
+    .inst-toggle {
+      margin-right: 4px;
+    }
+
+    .inst-arrow {
+      margin-left: auto;
+      font-size: 12px;
+      user-select: none;
+    }
+
+    .inst-dest-list {
+      list-style: none;
+      padding-left: 18px;
+      margin: 4px 0 4px 16px;
+      font-size: 13px;
+    }
+
+    .inst-dest-list.collapsed {
+      display: none;
+    }
+
+    .inst-dest-list li {
+      display: flex;
+      justify-content: space-between;
+      margin: 1px 0;
+      padding: 1px 4px;
+      border-radius: 4px;
+      transition: background 0.15s ease;
+    }
+
+    /* zvýraznění řádku v sidebaru při hoveru */
+    .inst-dest-list li.hovered {
+      background: #e3f2fd;
+    }
+
+    .inst-dest-list .loc-name {
+      margin-right: 4px;
+    }
+
+    .inst-dest-list .loc-distance {
+      white-space: nowrap;
+      color: #555;
+    }
+
+    /* Mapa vpravo */
+    #map {
+      flex: 1;
+      height: 100%;
+      width: 80%;
+    }
+
+    .leaflet-popup-content {
+      margin: 8px 12px;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+
+    .leaflet-popup-content strong {
+      font-size: 15px;
+    }
+
+    .leaflet-control-attribution {
+      font-size: 10px;
+    }
+
+    .city-label {
+      background: rgba(255, 255, 255, 0.9);
+      border-radius: 12px;
+      padding: 2px 8px;
+      border: 1px solid #ddd;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+      font-size: 12px;
+      color: #333;
+      white-space: nowrap;
+    }
+
+    .leaflet-interactive {
+      cursor: pointer;
+    }
+
+    /* tooltip pro vzdálenost trasy */
+    .route-label {
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      border-radius: 12px;
+      padding: 2px 8px;
+      font-size: 11px;
+      border: none;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div class="sidebar-header">
+        <h2>Uzly DS / trasy</h2>
+        <button id="toggle-all">Odoznačit vše</button>
+      </div>
+      <div id="inst-list"></div>
+    </div>
+    <div id="map"></div>
+  </div>
+
+  <!-- Data z DB -->
+  <script src="lokality.js?v=8"></script>
+
+  <!-- Leaflet JS -->
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin="">
+  </script>
+
+  <script>
+    const locations = (window.locations || []);
+
+    const defaultCenter = [49.8, 15.5];
+    const defaultZoom = 7;
+
+    // inst -> barva (včetně MGED2, MGED3, exCERBEROS2)
+    const INST_COLORS = {
+      "ČEZNET":      "#ff9800",
+      "EXWMS":       "#000000",
+      "EXCERBEROS":  "#4caf50",
+      "EXCERBEROS2": "#4caf50",
+      "MGED":        "#f44336",
+      "MGED2":       "#f44336",
+      "MGED3":       "#f44336",
+      "EXKTCZ":      "#9c27b0",
+      "EXW4S":       "#795548",
+      "EXOPT":       "#ffeb3b",
+      "EXINTERNEXT": "#2196f3",
+      "NA":          "#9e9e9e"
+    };
+
+    const ORS_API_KEY = "eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6IjI1YjY4ZGQ4NTI0NzRmNjA4MmI5NjMwODNhZjYyZTczIiwiaCI6Im11cm11cjY0In0=";
+
+    function getColorByInst(instRaw) {
+      if (!instRaw) return INST_COLORS["NA"];
+      const key = instRaw.toString().trim().toUpperCase();
+      if (INST_COLORS[key]) return INST_COLORS[key];
+      return INST_COLORS["NA"];
+    }
+
+    function hasDS(dsRaw) {
+      if (!dsRaw) return false;
+      return dsRaw.toString().toUpperCase().includes("DS");
+    }
+
+    // ---------- PŘÍPRAVA DAT: seskupení dle inst ----------
+
+    const instGroups = new Map();   // instKey -> { origins: [], all: [] }
+
+    locations.forEach(loc => {
+      const instKey = (loc.inst || "NA").toString().trim().toUpperCase();
+      if (!instGroups.has(instKey)) {
+        instGroups.set(instKey, { origins: [], all: [] });
+      }
+      const group = instGroups.get(instKey);
+      group.all.push(loc);
+      if (hasDS(loc.ds)) {
+        group.origins.push(loc);
+      }
+    });
+
+    // Struktura pro vrstvy na mapě podle inst
+    // polylines: pole objektů { line, targetId, color, baseWeight, baseOpacity }
+    const instLayers = {}; // instKey -> { markers: [], polylines: [], enabled: true }
+
+    // ---------- MAPA ----------
+
+    const map = L.map('map', {
+      center: defaultCenter,
+      zoom: defaultZoom
+    });
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      opacity: 0.9,   // mapa lehce transparentní
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+
+    let bounds = null;
+
+    // Markery
+    if (locations.length > 0) {
+      bounds = L.latLngBounds();
+
+      locations.forEach(loc => {
+        if (typeof loc.lat !== "number" || typeof loc.lng !== "number") return;
+
+        const position = [loc.lat, loc.lng];
+        const instKey = (loc.inst || "NA").toString().trim().toUpperCase();
+        const color = getColorByInst(instKey);
+        const isDS = hasDS(loc.ds);
+
+        const baseRadius = 8;
+        const radius = isDS ? baseRadius * 2 : baseRadius;
+
+        const marker = L.circleMarker(position, {
+          radius,
+          weight: 1,
+          color,
+          fillColor: color,
+          opacity: 1,
+          fillOpacity: 0.9
+        }).addTo(map);
+
+        marker.bindTooltip(loc.name || "", {
+          permanent: false,
+          direction: 'top',
+          offset: [0, -4],
+          className: 'city-label'
+        });
+
+        const popupHtml = `
+          <div>
+            <strong>${loc.name || "bez názvu"}</strong><br>
+            <small>
+              Lat/Lng: ${loc.lat.toFixed(5)}, ${loc.lng.toFixed(5)}<br>
+              inst: ${loc.inst || "NA"}<br>
+              DS: ${loc.ds || "&ndash;"}
+            </small>
+          </div>
+        `;
+        marker.bindPopup(popupHtml);
+
+        if (!instLayers[instKey]) {
+          instLayers[instKey] = { markers: [], polylines: [], enabled: true };
+        }
+        instLayers[instKey].markers.push(marker);
+
+        bounds.extend(position);
+      });
+
+      map.fitBounds(bounds, { padding: [20, 20] });
+    } else {
+      map.setView(defaultCenter, defaultZoom);
+    }
+
+    // ---------- SIDEBAR: seznam DS uzlů + destinací ----------
+
+    const instListEl = document.getElementById('inst-list');
+    const toggleAllBtn = document.getElementById('toggle-all');
+
+    instGroups.forEach((group, instKey) => {
+      const color = getColorByInst(instKey);
+      if (!group.origins.length || group.all.length <= 1) {
+        return;
+      }
+
+      const origin = group.origins[0];
+
+      const groupEl = document.createElement('div');
+      groupEl.className = 'inst-group';
+      groupEl.dataset.inst = instKey;
+
+      const headerEl = document.createElement('div');
+      headerEl.className = 'inst-header';
+
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'inst-toggle';
+      checkbox.checked = true;
+      checkbox.dataset.inst = instKey;
+
+      const labelSpan = document.createElement('span');
+      labelSpan.className = 'label-text';
+      labelSpan.textContent = origin.name || instKey;
+      labelSpan.style.color = color;
+
+      const arrowSpan = document.createElement('span');
+      arrowSpan.className = 'inst-arrow';
+      arrowSpan.textContent = '▼';
+
+      headerEl.appendChild(checkbox);
+      headerEl.appendChild(labelSpan);
+      headerEl.appendChild(arrowSpan);
+
+      const listEl = document.createElement('ul');
+      listEl.className = 'inst-dest-list';
+
+      group.all.forEach(loc => {
+        if (loc === origin) return;
+
+        const li = document.createElement('li');
+        li.dataset.targetId = String(loc.id);
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'loc-name';
+        nameSpan.textContent = loc.name || `ID ${loc.id}`;
+
+        const distSpan = document.createElement('span');
+        distSpan.className = 'loc-distance';
+        distSpan.textContent = '…';
+
+        li.appendChild(nameSpan);
+        li.appendChild(distSpan);
+        listEl.appendChild(li);
+
+        // hover v sidebaru -> zvýraznit trasu + řádek
+        li.addEventListener('mouseover', () => {
+          li.classList.add('hovered');
+          highlightRoute(instKey, loc.id, true);
+        });
+        li.addEventListener('mouseout', () => {
+          li.classList.remove('hovered');
+          highlightRoute(instKey, loc.id, false);
+        });
+      });
+
+      groupEl.appendChild(headerEl);
+      groupEl.appendChild(listEl);
+      instListEl.appendChild(groupEl);
+
+      // rozbalování / sbalování
+      headerEl.addEventListener('click', (e) => {
+        if (e.target === checkbox) return;
+        const collapsed = listEl.classList.toggle('collapsed');
+        arrowSpan.textContent = collapsed ? '▶' : '▼';
+      });
+
+      // checkbox: zap/vyp celé inst (markery + trasy)
+      checkbox.addEventListener('change', () => {
+        const layers = instLayers[instKey];
+        if (!layers) return;
+        const enable = checkbox.checked;
+        layers.enabled = enable;
+
+        layers.markers.forEach(m => {
+          if (enable) {
+            map.addLayer(m);
+          } else {
+            map.removeLayer(m);
+          }
+        });
+
+        layers.polylines.forEach(obj => {
+          const l = obj.line;
+          if (enable) {
+            map.addLayer(l);
+          } else {
+            map.removeLayer(l);
+          }
+        });
+      });
+    });
+
+    // ---------- TLAČÍTKO "VYBRAT / ODOZNAČIT VŠE" ----------
+
+    toggleAllBtn.addEventListener('click', () => {
+      const checkboxes = Array.from(document.querySelectorAll('.inst-toggle'));
+      if (!checkboxes.length) return;
+
+      const allChecked = checkboxes.every(cb => cb.checked);
+      const newState = !allChecked;
+
+      checkboxes.forEach(cb => {
+        if (cb.checked !== newState) {
+          cb.checked = newState;
+          cb.dispatchEvent(new Event('change'));
+        }
+      });
+
+      toggleAllBtn.textContent = newState ? 'Odoznačit vše' : 'Vybrat vše';
+    });
+
+    // ---------- Zvýraznění trasy při hoveru v sidebaru ----------
+
+    function highlightRoute(instKey, targetId, highlight) {
+      const layers = instLayers[instKey];
+      if (!layers || !layers.polylines) return;
+
+      layers.polylines.forEach(obj => {
+        if (String(obj.targetId) !== String(targetId)) return;
+        const line = obj.line;
+        if (!line) return;
+
+        if (highlight) {
+          line.setStyle({
+            color: "#ffffff",
+            weight: obj.baseWeight * 1.8,
+            opacity: 1
+          });
+        } else {
+          line.setStyle({
+            color: obj.color,
+            weight: obj.baseWeight,
+            opacity: obj.baseOpacity
+          });
+        }
+      });
+    }
+
+    // ---------- TRASY – ORS + vzdálenost ----------
+
+    function addDistanceTooltip(line, distanceMeters) {
+      const distanceKm = distanceMeters / 1000;
+      const label = distanceKm.toFixed(1) + " km";
+      line.bindTooltip(label, {
+        sticky: true,
+        className: "route-label"
+      });
+    }
+
+    function setSidebarDistance(instKey, targetId, distanceMeters) {
+      const groupEl = document.querySelector(`.inst-group[data-inst="${instKey}"]`);
+      if (!groupEl) return;
+      const span = groupEl.querySelector(`li[data-target-id="${targetId}"] .loc-distance`);
+      if (!span) return;
+      const km = distanceMeters / 1000;
+      span.textContent = km.toFixed(1) + " km";
+    }
+
+    function drawRouteORS(origin, target, color, instKey) {
+      const url = new URL("https://api.openrouteservice.org/v2/directions/driving-car");
+      url.searchParams.set("api_key", ORS_API_KEY);
+      url.searchParams.set("start", `${origin.lng},${origin.lat}`);
+      url.searchParams.set("end", `${target.lng},${target.lat}`);
+
+      fetch(url.toString())
+        .then(resp => {
+          if (!resp.ok) {
+            throw new Error("HTTP " + resp.status);
+          }
+          return resp.json();
+        })
+        .then(data => {
+          if (!data.features || !data.features.length) {
+            throw new Error("Žádné trasy v odpovědi");
+          }
+
+          const feature = data.features[0];
+          const coords = feature.geometry.coordinates.map(
+            ([lon, lat]) => [lat, lon]
+          );
+
+          let distanceMeters = 0;
+          if (feature.properties) {
+            if (feature.properties.segments && feature.properties.segments[0]) {
+              distanceMeters = feature.properties.segments[0].distance || 0;
+            } else if (feature.properties.summary) {
+              distanceMeters = feature.properties.summary.distance || 0;
+            }
+          }
+
+          const baseWeight = 3;
+          const baseOpacity = 0.85;
+
+          const line = L.polyline(coords, {
+            color,
+            weight: baseWeight,
+            opacity: baseOpacity
+          }).addTo(map);
+
+          if (!instLayers[instKey]) {
+            instLayers[instKey] = { markers: [], polylines: [], enabled: true };
+          }
+          instLayers[instKey].polylines.push({
+            line,
+            targetId: target.id,
+            color,
+            baseWeight,
+            baseOpacity
+          });
+
+          if (instLayers[instKey].enabled === false) {
+            map.removeLayer(line);
+          }
+
+          if (distanceMeters > 0) {
+            addDistanceTooltip(line, distanceMeters);
+            setSidebarDistance(instKey, target.id, distanceMeters);
+          }
+        })
+        .catch(err => {
+          console.warn("ORS selhal, kreslím přímou čáru:", origin.name, "->", target.name, err);
+
+          const originLL = L.latLng(origin.lat, origin.lng);
+          const targetLL = L.latLng(target.lat, target.lng);
+
+          const baseWeight = 2.5;
+          const baseOpacity = 0.7;
+
+          const line = L.polyline(
+            [originLL, targetLL],
+            {
+              color,
+              weight: baseWeight,
+              opacity: baseOpacity
+            }
+          ).addTo(map);
+
+          if (!instLayers[instKey]) {
+            instLayers[instKey] = { markers: [], polylines: [], enabled: true };
+          }
+          instLayers[instKey].polylines.push({
+            line,
+            targetId: target.id,
+            color,
+            baseWeight,
+            baseOpacity
+          });
+
+          if (instLayers[instKey].enabled === false) {
+            map.removeLayer(line);
+          }
+
+          const distanceMeters = originLL.distanceTo(targetLL);
+          addDistanceTooltip(line, distanceMeters);
+          setSidebarDistance(instKey, target.id, distanceMeters);
+        });
+    }
+
+    // z každého inst použijeme první DS jako výchozí bod
+    instGroups.forEach((group, instKey) => {
+      const color = getColorByInst(instKey);
+
+      if (!group.origins.length || group.all.length <= 1) return;
+
+      const origin = group.origins[0];
+
+      group.all.forEach(target => {
+        if (origin === target) return;
+
+        if (
+          typeof origin.lat !== "number" || typeof origin.lng !== "number" ||
+          typeof target.lat !== "number" || typeof target.lng !== "number"
+        ) {
+          return;
+        }
+
+        drawRouteORS(
+          { lat: origin.lat, lng: origin.lng, name: origin.name },
+          { lat: target.lat, lng: target.lng, name: target.name, id: target.id },
+          color,
+          instKey
+        );
+      });
+    });
+  </script>
+</body>
+</html>
