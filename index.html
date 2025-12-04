@@ -110,7 +110,7 @@
       flex: 1;
     }
 
-    /* Skupiny / seznam pro režim TRASY */
+    /* Skupiny / seznam pro režim TRASY + FARMÁŘI */
     .inst-group {
       margin-bottom: 8px;
       border-bottom: 1px solid #e0e0e0;
@@ -412,11 +412,11 @@
         setTimeout(() => map.invalidateSize(), 250);
       });
 
-      // Rozdílné chování podle datového souboru
       if (dataFile === 'lokality.js') {
         initLokalityView(map, locations);
+      } else if (dataFile === 'farmari.js') {
+        initFarmariView(map, locations);
       } else {
-        // default: režim TRASY (trasy.js, farmari.js ...)
         initTrasyView(map, locations);
       }
     }
@@ -428,7 +428,6 @@
       const toggleAllBtn = document.getElementById('toggle-all');
       instListEl.innerHTML = '';
 
-      // Přejmenujeme tlačítko, ať dává větší smysl
       toggleAllBtn.textContent = 'Schovat vše';
 
       const markersById = new Map();
@@ -443,7 +442,6 @@
 
         const pos = [loc.lat, loc.lng];
 
-        // oranžový marker
         const baseStyle = {
           radius: 8,
           weight: 1,
@@ -455,7 +453,6 @@
 
         const marker = L.circleMarker(pos, baseStyle).addTo(map);
 
-        // popup obsah
         const penetration = typeof loc.penetration === 'number'
           ? loc.penetration
           : (loc.hh > 0 ? (loc.hc / loc.hh * 100) : null);
@@ -474,10 +471,8 @@
         `;
         marker.bindPopup(popupHtml);
 
-        // mouseover na markeru → zobraz popup
         marker.on('mouseover', () => {
           marker.openPopup();
-          // jemné zvýraznění
           marker.setStyle({
             radius: baseStyle.radius * 1.4,
             weight: 3,
@@ -494,7 +489,6 @@
         if (!bounds) bounds = L.latLngBounds(pos, pos);
         else bounds.extend(pos);
 
-        // sidebar položka
         const li = document.createElement('li');
         li.className = 'loc-item';
         li.dataset.id = String(loc.id);
@@ -512,11 +506,11 @@
         } else {
           penSpan.textContent = penetration.toFixed(1) + ' %';
           if (penetration < 10) {
-            penSpan.style.color = '#e53935';        // červená
+            penSpan.style.color = '#e53935';
           } else if (penetration < 20) {
-            penSpan.style.color = '#f9a825';        // tmavě žlutá
+            penSpan.style.color = '#f9a825';
           } else {
-            penSpan.style.color = '#43a047';        // zelená
+            penSpan.style.color = '#43a047';
           }
         }
 
@@ -524,7 +518,6 @@
         li.appendChild(penSpan);
         ul.appendChild(li);
 
-        // hover v sidebaru → zvýrazni marker + ukaž popup
         li.addEventListener('mouseover', () => {
           li.classList.add('hovered');
           const m = markersById.get(String(loc.id));
@@ -552,11 +545,192 @@
         map.fitBounds(bounds, { padding: [20, 20] });
       }
 
-      // Tlačítko „Schovat / zobrazit vše“ pro markery
       let allVisible = true;
       toggleAllBtn.addEventListener('click', () => {
         allVisible = !allVisible;
         markersById.forEach(marker => {
+          if (allVisible) {
+            map.addLayer(marker);
+          } else {
+            map.removeLayer(marker);
+          }
+        });
+        toggleAllBtn.textContent = allVisible ? 'Schovat vše' : 'Zobrazit vše';
+      });
+    }
+
+    /* ======================= REŽIM FARMÁŘI ======================= */
+
+    function initFarmariView(map, locations) {
+      const instListEl = document.getElementById('inst-list');
+      const toggleAllBtn = document.getElementById('toggle-all');
+      instListEl.innerHTML = '';
+
+      toggleAllBtn.textContent = 'Schovat vše';
+
+      const MANAGER_COLORS = {
+        "David Průcha": '#2196f3', // modrá
+        "Petr Klumpar": '#f44336'  // červená
+      };
+
+      const markersById = new Map(); // id -> { marker, baseStyle }
+      let bounds = null;
+
+      // seskupení podle managera (jen dva)
+      const managerGroups = new Map();
+      Object.keys(MANAGER_COLORS).forEach(name => managerGroups.set(name, []));
+
+      locations.forEach(loc => {
+        const manager = (loc.manager || loc.inst || '').trim();
+        if (!managerGroups.has(manager)) return; // ignoruj jiné
+        managerGroups.get(manager).push(loc);
+      });
+
+      // nejdřív vytvoříme markery pro všechny lokality
+      managerGroups.forEach((locs, manager) => {
+        const color = MANAGER_COLORS[manager] || '#9e9e9e';
+
+        locs.forEach(loc => {
+          if (typeof loc.lat !== "number" || typeof loc.lng !== "number") return;
+          const pos = [loc.lat, loc.lng];
+
+          const baseStyle = {
+            radius: 9,
+            weight: 2,
+            color,
+            fillColor: color,
+            opacity: 1,
+            fillOpacity: 0.9
+          };
+
+          const marker = L.circleMarker(pos, baseStyle).addTo(map);
+
+          const penetration = typeof loc.penetration === 'number'
+            ? loc.penetration
+            : (loc.hh > 0 ? (loc.hc / loc.hh * 100) : null);
+
+          const penText = penetration != null ? penetration.toFixed(1) + ' %' : 'N/A';
+
+          const popupHtml = `
+            <div>
+              <strong>${loc.name || "bez názvu"}</strong><br>
+              <small>
+                Správce: ${manager}<br>
+                HH: ${loc.hh ?? 0}<br>
+                HC: ${loc.hc ?? 0}<br>
+                Penetrace: ${penText}
+              </small>
+            </div>
+          `;
+          marker.bindPopup(popupHtml);
+
+          marker.on('mouseover', () => {
+            marker.openPopup();
+            marker.setStyle({
+              radius: baseStyle.radius * 1.4,
+              weight: 3,
+              color: '#ffffff'
+            });
+          });
+          marker.on('mouseout', () => {
+            marker.closePopup();
+            marker.setStyle(baseStyle);
+          });
+
+          markersById.set(String(loc.id), { marker, baseStyle });
+
+          if (!bounds) bounds = L.latLngBounds(pos, pos);
+          else bounds.extend(pos);
+        });
+      });
+
+      if (bounds) {
+        map.fitBounds(bounds, { padding: [20, 20] });
+      }
+
+      // Sidebar – dvě skupiny: David, Petr
+      managerGroups.forEach((locs, manager) => {
+        if (!locs.length) return;
+
+        const color = MANAGER_COLORS[manager] || '#333';
+
+        const groupEl = document.createElement('div');
+        groupEl.className = 'inst-group';
+        groupEl.dataset.manager = manager;
+
+        const headerEl = document.createElement('div');
+        headerEl.className = 'inst-header';
+
+        const labelSpan = document.createElement('span');
+        labelSpan.className = 'label-text';
+        labelSpan.textContent = manager;
+        labelSpan.style.color = color;
+
+        const arrowSpan = document.createElement('span');
+        arrowSpan.className = 'inst-arrow';
+        arrowSpan.textContent = '▼';
+
+        headerEl.appendChild(labelSpan);
+        headerEl.appendChild(arrowSpan);
+
+        const listEl = document.createElement('ul');
+        listEl.className = 'inst-dest-list';
+
+        locs.forEach(loc => {
+          const li = document.createElement('li');
+          li.dataset.id = String(loc.id);
+
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'loc-name';
+          nameSpan.textContent = loc.name || `ID ${loc.id}`;
+
+          const dummySpan = document.createElement('span');
+          dummySpan.textContent = ''; // vpravo nic, můžeme doplnit později např. penetraci
+
+          li.appendChild(nameSpan);
+          li.appendChild(dummySpan);
+          listEl.appendChild(li);
+
+          // hover → zvýrazni marker a ukaž popup
+          li.addEventListener('mouseover', () => {
+            li.classList.add('hovered');
+            const entry = markersById.get(String(loc.id));
+            if (entry) {
+              entry.marker.setStyle({
+                radius: entry.baseStyle.radius * 1.6,
+                weight: 3,
+                color: '#ffffff'
+              });
+              entry.marker.openPopup();
+            }
+          });
+
+          li.addEventListener('mouseout', () => {
+            li.classList.remove('hovered');
+            const entry = markersById.get(String(loc.id));
+            if (entry) {
+              entry.marker.setStyle(entry.baseStyle);
+              entry.marker.closePopup();
+            }
+          });
+        });
+
+        groupEl.appendChild(headerEl);
+        groupEl.appendChild(listEl);
+        instListEl.appendChild(groupEl);
+
+        // sbalit / rozbalit seznam
+        headerEl.addEventListener('click', () => {
+          const collapsed = listEl.classList.toggle('collapsed');
+          arrowSpan.textContent = collapsed ? '▶' : '▼';
+        });
+      });
+
+      // Schovat / zobrazit všechny markery
+      let allVisible = true;
+      toggleAllBtn.addEventListener('click', () => {
+        allVisible = !allVisible;
+        markersById.forEach(({ marker }) => {
           if (allVisible) {
             map.addLayer(marker);
           } else {
@@ -575,7 +749,6 @@
       instListEl.innerHTML = '';
       toggleAllBtn.textContent = 'Odoznačit vše';
 
-      // příprava dat
       const instGroups = new Map();   // instKey -> { origins: [], all: [] }
 
       locations.forEach(loc => {
@@ -594,7 +767,6 @@
 
       let bounds = null;
 
-      // Markery
       if (locations.length > 0) {
         locations.forEach(loc => {
           if (typeof loc.lat !== "number" || typeof loc.lng !== "number") return;
@@ -649,11 +821,10 @@
         }
       }
 
-      // SIDEBAR
       instGroups.forEach((group, instKey) => {
         const color = getColorByInst(instKey);
         if (!group.origins.length || group.all.length <= 1) {
-          return; // bez DS nebo jen jedna lokalita nemá smysl
+          return;
         }
 
         const origin = group.origins[0];
@@ -750,7 +921,6 @@
         });
       });
 
-      // TLAČÍTKO "VYBRAT / ODOZNAČIT VŠE" (inst)
       toggleAllBtn.addEventListener('click', () => {
         const checkboxes = Array.from(document.querySelectorAll('.inst-toggle'));
         if (!checkboxes.length) return;
@@ -767,8 +937,6 @@
 
         toggleAllBtn.textContent = newState ? 'Odoznačit vše' : 'Vybrat vše';
       });
-
-      /* ---- TRASY + VZDÁLENOST ---- */
 
       function addDistanceTooltip(line, distanceMeters) {
         const distanceKm = distanceMeters / 1000;
@@ -913,7 +1081,6 @@
         });
       }
 
-      // Vygenerovat trasy z DS uzlu ke všem v daném inst
       instGroups.forEach((group, instKey) => {
         const color = getColorByInst(instKey);
 
